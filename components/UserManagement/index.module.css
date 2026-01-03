@@ -1,0 +1,139 @@
+.modal :global(.ant-modal-content) {
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.modal :global(.ant-modal-header) {
+  background: transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.modal :global(.ant-modal-title) {
+  color: white;
+}
+
+.modal :global(.ant-modal-close) {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.section {
+  margin-bottom: 24px;
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  margin: 0 0 16px 0;
+}
+
+.sectionHeader .sectionTitle {
+  margin: 0;
+}
+
+.profileCard {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.profileInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 20px;
+}
+
+.profileDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.username {
+  font-size: 16px;
+  font-weight: 600;
+  color: white;
+}
+
+.table {
+  margin-top: 8px;
+}
+
+.table :global(.ant-table) {
+  background: transparent;
+}
+
+.table :global(.ant-table-thead > tr > th) {
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.8);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.table :global(.ant-table-tbody > tr > td) {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.table :global(.ant-table-tbody > tr:hover > td) {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.form {
+  margin-top: 16px;
+}
+
+.form :global(.ant-form-item-label > label) {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.form :global(.ant-input-affix-wrapper),
+.form :global(.ant-input) {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.form :global(.ant-input-affix-wrapper:hover),
+.form :global(.ant-input:hover) {
+  border-color: #667eea;
+}
+
+.form :global(.ant-input-affix-wrapper-focused),
+.form :global(.ant-input:focus) {
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+.form :global(.ant-input-prefix) {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.formActions {
+  margin-bottom: 0;
+  margin-top: 24px;
+  text-align: right;
+}

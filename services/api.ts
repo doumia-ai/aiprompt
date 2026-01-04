@@ -456,6 +456,12 @@ export async function optimizePrompt(
     });
 
     const content = response.choices[0]?.message?.content || '';
+
+    // 验证响应内容不为空
+    if (!content.trim()) {
+      throw new Error('API 返回了空响应。请检查模型配置或稍后重试。');
+    }
+
     return parseOptimizationResponse(content);
   } catch (err) {
     if (err instanceof OpenAI.APIError) {

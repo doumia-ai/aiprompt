@@ -18,22 +18,23 @@
 
 import { NextResponse } from 'next/server';
 
-// Provider configuration interface
-interface ProviderConfig {
+// Provider configuration interface (local to this route, different from services/llm/providers)
+// This interface is for the models API response, not for LLM client configuration
+interface ModelsRouteProviderConfig {
   id: string;
   name: string;
-  baseUrl: string;
+  baseURL: string;
   apiKey: string;
   models: { id: string; label: string }[];
   defaultModel: string;
 }
 
 // Parse providers from environment variables
-function getProviders(): ProviderConfig[] {
+function getProviders(): ModelsRouteProviderConfig[] {
   const providersStr = process.env.PROVIDERS || 'deepseek';
   const providerIds = providersStr.split(',').map((p: string) => p.trim()).filter(Boolean);
 
-  const providers: ProviderConfig[] = [];
+  const providers: ModelsRouteProviderConfig[] = [];
 
   for (const providerId of providerIds) {
     const upperProviderId = providerId.toUpperCase();
@@ -60,7 +61,7 @@ function getProviders(): ProviderConfig[] {
       providers.push({
         id: providerId,
         name,
-        baseUrl,
+        baseURL: baseUrl,
         apiKey,
         models,
         // Use configured default or first model in list
@@ -81,7 +82,7 @@ function getProviders(): ProviderConfig[] {
       providers.push({
         id: 'default',
         name: '默认服务',
-        baseUrl: legacyBaseUrl,
+        baseURL: legacyBaseUrl,
         apiKey: legacyApiKey,
         models: models.map((id: string) => ({
           id,

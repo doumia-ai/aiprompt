@@ -6,12 +6,13 @@ import {
   recordExperimentalOutcome,
 } from './metrics/experimental-circuit-breaker';
 
-const VOLCES_EXPERIMENTAL_MODELS = [
-  // DeepSeek V3.2
-  'ep-m-20260104054639-v6dm6',
-  // Kimi K2
-  'ep-m-20260104055910-gtzqr',
-];
+// 从环境变量读取实验模型列表，支持逗号分隔
+// 格式: VOLCES_EXPERIMENTAL_MODELS=ep-m-xxx,ep-m-yyy
+const VOLCES_EXPERIMENTAL_MODELS = (
+  process.env.VOLCES_EXPERIMENTAL_MODELS ||
+  // 默认值（向后兼容）
+  'ep-m-20260104054639-v6dm6,ep-m-20260104055910-gtzqr'
+).split(',').map(m => m.trim()).filter(Boolean);
 
 function assertVolcesExperimental(model: string) {
   if (!VOLCES_EXPERIMENTAL_MODELS.includes(model)) {
@@ -51,22 +52,17 @@ export async function callVolcesExperimentalChat({
 
   // ===== Streaming =====
   if (stream) {
-    let recorded = false;
-
     const streamResp = await client.chat.completions.create({
       model,
       messages,
       stream: true,
     });
 
-    // ⭐ 关键点：stream 能成功建立，就算“成功一次”
-    recordExperimentalOutcome(model, true);
-    recorded = true;
-
     const encoder = new TextEncoder();
 
     return new ReadableStream({
       async start(controller) {
+        let streamCompleted = false;
         try {
           for await (const part of streamResp) {
             controller.enqueue(
@@ -78,10 +74,13 @@ export async function callVolcesExperimentalChat({
           controller.enqueue(
             encoder.encode('data: [DONE]\n\n')
           );
+          streamCompleted = true;
+          // ⭐ 只有流完全完成后才记录成功
+          recordExperimentalOutcome(model, true);
           controller.close();
         } catch (err) {
-          // 如果 streaming 中途崩溃，且尚未记录过
-          if (!recorded) {
+          // 流中途失败，记录失败
+          if (!streamCompleted) {
             recordExperimentalOutcome(model, false);
           }
           controller.error(err);

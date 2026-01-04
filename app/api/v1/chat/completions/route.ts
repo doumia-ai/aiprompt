@@ -3,7 +3,7 @@ export const maxDuration = 300;
 
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { loadProviders, createOpenAIClient } from '@/services/llm';
+import { loadProviders, createOpenAIClient, MissingApiKeyError } from '@/services/llm';
 import { callVolcesExperimentalChat } from '@/services/llm/volces-adapter';
 import type { ProviderConfig } from '@/services/llm/providers';
 
@@ -42,12 +42,20 @@ function resolveProviderAndModel(model?: string) {
   if (model.includes(':')) {
     const [providerId, ...rest] = model.split(':');
     return {
-      providerId: providerId.toLowerCase(),
+      providerId: providerId.toLowerCase(), // 统一转为小写
       model: rest.join(':'),
     };
   }
 
   return { model };
+}
+
+/**
+ * 根据 providerId 查找 provider（大小写不敏感）
+ */
+function findProvider(providerId: string): ProviderConfig | undefined {
+  const normalizedId = providerId.toLowerCase();
+  return providersMap[normalizedId];
 }
 
 /* =========================
@@ -185,11 +193,14 @@ export async function POST(req: NextRequest) {
    */
   let chain: Provider[] = providersList;
 
-  if (providerId && providersMap[providerId]) {
-    chain = [
-      providersMap[providerId],
-      ...providersList.filter(p => p.id !== providerId),
-    ];
+  if (providerId) {
+    const targetProvider = findProvider(providerId);
+    if (targetProvider) {
+      chain = [
+        targetProvider,
+        ...providersList.filter(p => p.id !== targetProvider.id),
+      ];
+    }
   }
 
   if (chain.length === 0) {
@@ -251,6 +262,19 @@ export async function POST(req: NextRequest) {
   }
 
   // All providers failed
+  if (lastError instanceof MissingApiKeyError) {
+    return NextResponse.json(
+      {
+        error: {
+          message: lastError.message,
+          code: 'missing_api_key',
+          provider: 'all_failed',
+        },
+      },
+      { status: 401 }
+    );
+  }
+
   if (lastError instanceof OpenAI.APIError) {
     return NextResponse.json(
       {

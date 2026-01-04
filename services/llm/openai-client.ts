@@ -1,14 +1,28 @@
 import OpenAI from 'openai';
 import type { ProviderConfig } from './providers';
 
+export class MissingApiKeyError extends Error {
+  constructor(providerId: string) {
+    super(`Provider "${providerId}" 未配置 API Key`);
+    this.name = 'MissingApiKeyError';
+  }
+}
+
 export function createOpenAIClient(
   provider: ProviderConfig,
   overrideApiKey?: string
 ) {
+  const apiKey = overrideApiKey || provider.apiKey;
+
+  // 验证 API Key 是否存在
+  if (!apiKey) {
+    throw new MissingApiKeyError(provider.id);
+  }
+
   const isNvidia = provider.id === 'nvidia';
 
   return new OpenAI({
-    apiKey: overrideApiKey || provider.apiKey || 'dummy',
+    apiKey,
     baseURL: provider.baseURL,
 
     // ⭐ 核心差异在这里

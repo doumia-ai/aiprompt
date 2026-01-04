@@ -379,10 +379,21 @@ export const useSettingsStore = (): SettingsStore => {
       // Cannot delete built-in models
       if (model?.isBuiltIn) return prev;
 
+      const remainingModels = prev.models.filter((m) => m.id !== id);
+      // 如果删除的是当前选中的模型，选择剩余模型中的第一个，或保持为空
+      let newSelectedModelId = prev.selectedModelId;
+      if (prev.selectedModelId === id) {
+        // 优先选择同 provider 的模型
+        const sameProviderModel = remainingModels.find(
+          (m) => m.providerId === model?.providerId
+        );
+        newSelectedModelId = sameProviderModel?.id || remainingModels[0]?.id || '';
+      }
+
       const next = {
         ...prev,
-        models: prev.models.filter((m) => m.id !== id),
-        selectedModelId: prev.selectedModelId === id ? prev.models[0]?.id || '' : prev.selectedModelId,
+        models: remainingModels,
+        selectedModelId: newSelectedModelId,
       };
       saveSettings(next);
       return next;

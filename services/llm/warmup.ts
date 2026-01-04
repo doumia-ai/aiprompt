@@ -23,7 +23,7 @@ export async function warmupNvidia() {
 
   try {
     await client.chat.completions.create({
-      model: nvidia.defaultModel,
+      model: nvidia.defaultModel || '',
       messages: [
         { role: 'user', content: WARMUP_PROMPT },
       ],

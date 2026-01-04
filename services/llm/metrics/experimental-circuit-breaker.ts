@@ -2,7 +2,7 @@
 
 type CircuitState = 'closed' | 'open' | 'half-open';
 
-type Record = {
+type OutcomeRecord = {
   ok: boolean;
   ts: number;
 };
@@ -14,7 +14,7 @@ const OPEN_DURATION_MS = 5 * 60 * 1000; // 5 分钟
 type Circuit = {
   state: CircuitState;
   openedAt?: number;
-  records: Record[];
+  records: OutcomeRecord[];
 };
 
 const circuits: Record<string, Circuit> = {};

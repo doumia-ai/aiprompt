@@ -4,11 +4,21 @@ import { ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import "./globals.css";
 
+// ⭐ 新增：NVIDIA 预热
+import { warmupNvidia } from "@/services/llm/warmup";
 export const metadata: Metadata = {
   title: "AI 提示词优化工具",
   description: "专业的 AI 提示词优化工具，帮助你写出更好的 Prompt",
 };
 
+// ⭐ NVIDIA 预热：只在 server 启动时触发
+if (typeof window === "undefined") {
+  // 避免 dev 下反复触发（可选，但推荐）
+  if (process.env.NODE_ENV === "production") {
+    // 不 await，不阻塞
+    warmupNvidia();
+  }
+}
 // Cyberpunk / Glitch Theme Configuration
 const cyberpunkTheme = {
   token: {

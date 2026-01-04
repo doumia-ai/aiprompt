@@ -6,6 +6,23 @@ import OpenAI from 'openai';
 import { loadProviders, createOpenAIClient } from '@/services/llm';
 import { callVolcesExperimentalChat } from '@/services/llm/volces-adapter';
 
+/* =========================
+ * Types (关键修复点)
+ * ========================= */
+
+type Provider = {
+  id: string;
+  defaultModel: string;
+  [key: string]: any;
+};
+
+interface ChatRequestBody {
+  messages: { role: string; content: string }[];
+  model?: string;
+  stream?: boolean;
+  [key: string]: any;
+}
+
 /**
  * Provider priority:
  * 1. explicit provider:model
@@ -13,7 +30,7 @@ import { callVolcesExperimentalChat } from '@/services/llm/volces-adapter';
  * 3. others in PROVIDERS order
  */
 const providersMap = loadProviders();
-const providersList = Object.values(providersMap);
+const providersList: Provider[] = Object.values(providersMap);
 
 function resolveProviderAndModel(model?: string) {
   if (!model) return {};
@@ -29,18 +46,23 @@ function resolveProviderAndModel(model?: string) {
   return { model };
 }
 
+/* =========================
+ * Streaming
+ * ========================= */
+
 async function tryStreaming(
-  provider,
-  body,
+  provider: Provider,
+  body: ChatRequestBody,
   overrideKey?: string
 ) {
   const client = createOpenAIClient(provider, overrideKey);
 
-  const stream = await client.chat.completions.create({
-    ...body,
-    model: body.model || provider.defaultModel,
-    stream: true,
-  } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
+  const stream =
+    await client.chat.completions.create({
+      ...body,
+      model: body.model || provider.defaultModel,
+      stream: true,
+    } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
   const encoder = new TextEncoder();
 
@@ -61,9 +83,13 @@ async function tryStreaming(
   });
 }
 
+/* =========================
+ * Non-streaming
+ * ========================= */
+
 async function tryNonStreaming(
-  provider,
-  body,
+  provider: Provider,
+  body: ChatRequestBody,
   overrideKey?: string
 ) {
   const client = createOpenAIClient(provider, overrideKey);
@@ -75,8 +101,12 @@ async function tryNonStreaming(
   });
 }
 
+/* =========================
+ * POST Handler
+ * ========================= */
+
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  const body = (await req.json()) as ChatRequestBody;
   const { providerId, model } = resolveProviderAndModel(body.model);
 
   const auth = req.headers.get('authorization');
@@ -148,7 +178,7 @@ export async function POST(req: NextRequest) {
   /**
    * Build provider fallback chain
    */
-  let chain = providersList;
+  let chain: Provider[] = providersList;
 
   if (providerId && providersMap[providerId]) {
     chain = [
@@ -164,7 +194,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const requestBody = {
+  const requestBody: ChatRequestBody = {
     ...body,
     model,
   };
@@ -240,4 +270,3 @@ export async function POST(req: NextRequest) {
     { status: 500 }
   );
 }
-

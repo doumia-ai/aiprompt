@@ -5,22 +5,26 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { loadProviders, createOpenAIClient } from '@/services/llm';
 import { callVolcesExperimentalChat } from '@/services/llm/volces-adapter';
+import type { ProviderConfig } from '@/services/llm/providers';
 
 /* =========================
- * Types (关键修复点)
+ * Types
  * ========================= */
 
-type Provider = {
-  id: string;
-  defaultModel: string;
-  [key: string]: any;
-};
+type Provider = ProviderConfig;
+
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
 
 interface ChatRequestBody {
-  messages: { role: string; content: string }[];
+  messages: ChatMessage[];
   model?: string;
   stream?: boolean;
-  [key: string]: any;
+  temperature?: number;
+  max_tokens?: number;
+  [key: string]: unknown;
 }
 
 /**
@@ -54,15 +58,17 @@ async function tryStreaming(
   provider: Provider,
   body: ChatRequestBody,
   overrideKey?: string
-) {
+): Promise<ReadableStream<Uint8Array>> {
   const client = createOpenAIClient(provider, overrideKey);
+  const modelToUse = body.model || provider.defaultModel || '';
 
-  const stream =
-    await client.chat.completions.create({
-      ...body,
-      model: body.model || provider.defaultModel,
-      stream: true,
-    } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
+  const stream = await client.chat.completions.create({
+    messages: body.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+    model: modelToUse,
+    stream: true,
+    temperature: body.temperature,
+    max_tokens: body.max_tokens,
+  });
 
   const encoder = new TextEncoder();
 
@@ -91,13 +97,16 @@ async function tryNonStreaming(
   provider: Provider,
   body: ChatRequestBody,
   overrideKey?: string
-) {
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
   const client = createOpenAIClient(provider, overrideKey);
+  const modelToUse = body.model || provider.defaultModel || '';
 
   return await client.chat.completions.create({
-    ...body,
-    model: body.model || provider.defaultModel,
+    messages: body.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+    model: modelToUse,
     stream: false,
+    temperature: body.temperature,
+    max_tokens: body.max_tokens,
   });
 }
 
@@ -128,15 +137,16 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      if (body.stream === true) {
-        const readable = await callVolcesExperimentalChat({
-          model,
-          messages: body.messages,
-          stream: true,
-          apiKey,
-        });
+      const result = await callVolcesExperimentalChat({
+        model: model || '',
+        messages: body.messages,
+        stream: body.stream,
+        apiKey,
+      });
 
-        return new Response(readable, {
+      // Check if result is a ReadableStream (streaming response)
+      if (result instanceof ReadableStream) {
+        return new Response(result, {
           headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -147,26 +157,21 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      const result = await callVolcesExperimentalChat({
-        model,
-        messages: body.messages,
-        apiKey,
-      });
-
+      // Non-streaming response
       return NextResponse.json(result, {
         headers: {
           'X-LLM-Provider': 'volces-experimental',
           'X-LLM-Note': 'experimental',
         },
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[VOLCES EXPERIMENTAL ERROR]', err);
+      const errorMessage = err instanceof Error ? err.message : 'Volces experimental model failed';
 
       return NextResponse.json(
         {
           error: {
-            message:
-              err?.message || 'Volces experimental model failed',
+            message: errorMessage,
             provider: 'volces-experimental',
           },
         },
@@ -199,7 +204,7 @@ export async function POST(req: NextRequest) {
     model,
   };
 
-  let lastError: any = null;
+  let lastError: unknown = null;
 
   for (const provider of chain) {
     try {
@@ -235,7 +240,7 @@ export async function POST(req: NextRequest) {
           'X-LLM-Provider': provider.id,
         },
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(
         `[LLM FALLBACK] ${provider.id} failed`,
         err
@@ -259,11 +264,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const errorMessage = lastError instanceof Error ? lastError.message : 'All providers failed';
   return NextResponse.json(
     {
       error: {
-        message:
-          lastError?.message || 'All providers failed',
+        message: errorMessage,
         provider: 'all_failed',
       },
     },

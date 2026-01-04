@@ -1,0 +1,108 @@
+// services/llm/volces-adapter.ts
+
+import OpenAI from 'openai';
+import {
+  canCallExperimentalModel,
+  recordExperimentalOutcome,
+} from './metrics/experimental-circuit-breaker';
+
+const VOLCES_EXPERIMENTAL_MODELS = [
+  // DeepSeek V3.2
+  'ep-m-20260104054639-v6dm6',
+  // Kimi K2
+  'ep-m-20260104055910-gtzqr',
+];
+
+function assertVolcesExperimental(model: string) {
+  if (!VOLCES_EXPERIMENTAL_MODELS.includes(model)) {
+    throw new Error(
+      `Volces model ${model} is not marked as experimental-chat`
+    );
+  }
+}
+
+export async function callVolcesExperimentalChat({
+  model,
+  messages,
+  stream,
+  apiKey,
+}: {
+  model: string;
+  messages: any[];
+  stream?: boolean;
+  apiKey: string;
+}) {
+  // ① 模型合法性校验
+  assertVolcesExperimental(model);
+
+  // ② 熔断判断（正确位置）
+  if (!canCallExperimentalModel(model)) {
+    throw new Error(
+      `Volces experimental model ${model} is temporarily circuit-open`
+    );
+  }
+
+  const client = new OpenAI({
+    apiKey,
+    baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+    timeout: 120_000,
+    maxRetries: 0,
+  });
+
+  // ===== Streaming =====
+  if (stream) {
+    let recorded = false;
+
+    const streamResp = await client.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+    });
+
+    // ⭐ 关键点：stream 能成功建立，就算“成功一次”
+    recordExperimentalOutcome(model, true);
+    recorded = true;
+
+    const encoder = new TextEncoder();
+
+    return new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const part of streamResp) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify(part)}\n\n`
+              )
+            );
+          }
+          controller.enqueue(
+            encoder.encode('data: [DONE]\n\n')
+          );
+          controller.close();
+        } catch (err) {
+          // 如果 streaming 中途崩溃，且尚未记录过
+          if (!recorded) {
+            recordExperimentalOutcome(model, false);
+          }
+          controller.error(err);
+        }
+      },
+    });
+  }
+
+  // ===== Non-streaming =====
+  try {
+    const result = await client.chat.completions.create({
+      model,
+      messages,
+    });
+
+    // ⭐ 成功返回前（你问的就是这里）
+    recordExperimentalOutcome(model, true);
+
+    return result;
+  } catch (err) {
+    recordExperimentalOutcome(model, false);
+    throw err;
+  }
+}

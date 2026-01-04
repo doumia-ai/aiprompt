@@ -1,205 +1,243 @@
-/**
- * LLM API Proxy Route
- *
- * Uses OpenAI SDK to forward requests to the backend LLM service
- * Supports streaming responses and multiple providers
- *
- * Environment variables:
- * - PROVIDERS: Comma-separated list of provider IDs
- * - {PROVIDER}_BASE_URL: Provider API base URL
- * - {PROVIDER}_API_KEY: Provider API key
- * 
- * Legacy (backward compatible):
- * - LLM_BACKEND_URL: Backend API base URL
- * - LLM_API_KEY: Backend API key
- */
+export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { loadProviders, createOpenAIClient } from '@/services/llm';
+import { callVolcesExperimentalChat } from '@/services/llm/volces-adapter';
 
-// Provider configuration interface
-interface ProviderConfig {
-  id: string;
-  baseUrl: string;
-  apiKey: string;
-}
+/**
+ * Provider priority:
+ * 1. explicit provider:model
+ * 2. NVIDIA (if exists)
+ * 3. others in PROVIDERS order
+ */
+const providersMap = loadProviders();
+const providersList = Object.values(providersMap);
 
-// Get provider configuration from environment
-function getProviderConfig(providerId?: string): ProviderConfig | null {
-  // If providerId specified, try to get that provider's config
-  if (providerId && providerId !== 'default') {
-    const upperProviderId = providerId.toUpperCase();
-    const baseUrl = process.env[`${upperProviderId}_BASE_URL`];
-    const apiKey = process.env[`${upperProviderId}_API_KEY`] || '';
+function resolveProviderAndModel(model?: string) {
+  if (!model) return {};
 
-    if (baseUrl) {
-      return { id: providerId, baseUrl, apiKey };
-    }
+  if (model.includes(':')) {
+    const [providerId, ...rest] = model.split(':');
+    return {
+      providerId: providerId.toLowerCase(),
+      model: rest.join(':'),
+    };
   }
 
-  // Fallback to legacy single-provider config
-  const legacyBaseUrl = process.env.LLM_BACKEND_URL || '';
-  const legacyApiKey = process.env.LLM_API_KEY || '';
-
-  if (legacyBaseUrl) {
-    return { id: 'default', baseUrl: legacyBaseUrl, apiKey: legacyApiKey };
-  }
-
-  return null;
+  return { model };
 }
 
-// Get base URL (remove /chat/completions if present)
-function getBaseUrl(url: string): string {
-  if (url.endsWith('/chat/completions')) {
-    return url.slice(0, -'/chat/completions'.length);
-  }
-  return url;
-}
+async function tryStreaming(
+  provider,
+  body,
+  overrideKey?: string
+) {
+  const client = createOpenAIClient(provider, overrideKey);
 
-// Create OpenAI client for a specific provider
-function createClient(provider: ProviderConfig, clientApiKey?: string): OpenAI {
-  const baseURL = getBaseUrl(provider.baseUrl);
-  const key = clientApiKey || provider.apiKey;
+  const stream = await client.chat.completions.create({
+    ...body,
+    model: body.model || provider.defaultModel,
+    stream: true,
+  } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
-  return new OpenAI({
-    apiKey: key || 'dummy',
-    baseURL,
-    timeout: 120000,
-    maxRetries: 2,
+  const encoder = new TextEncoder();
+
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        for await (const chunk of stream) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+          );
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
   });
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    
-    // Extract provider ID from model string (format: "providerId:modelId" or just "modelId")
-    let providerId: string | undefined;
-    let modelId = body.model;
-    
-    if (body.model && body.model.includes(':')) {
-      const parts = body.model.split(':');
-      providerId = parts[0];
-      modelId = parts.slice(1).join(':');
-    }
+async function tryNonStreaming(
+  provider,
+  body,
+  overrideKey?: string
+) {
+  const client = createOpenAIClient(provider, overrideKey);
 
-    // Also check for explicit provider header
-    const headerProviderId = request.headers.get('X-Provider-Id');
-    if (headerProviderId) {
-      providerId = headerProviderId;
-    }
+  return await client.chat.completions.create({
+    ...body,
+    model: body.model || provider.defaultModel,
+    stream: false,
+  });
+}
 
-    // Get provider configuration
-    const provider = getProviderConfig(providerId);
-    
-    if (!provider) {
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const { providerId, model } = resolveProviderAndModel(body.model);
+
+  const auth = req.headers.get('authorization');
+  const clientKey =
+    auth?.startsWith('Bearer ') ? auth.slice(7) : undefined;
+
+  /**
+   * 🔥 Volces Experimental Chat (NO fallback)
+   * Only for DeepSeek V3.2 / Kimi K2
+   */
+  if (providerId === 'volces-experimental') {
+    const apiKey = clientKey || process.env.VOLCES_API_KEY;
+
+    if (!apiKey) {
       return NextResponse.json(
-        { 
-          error: { 
-            message: 'LLM backend not configured. Set provider environment variables or LLM_BACKEND_URL.', 
-            type: 'config_error' 
-          } 
+        { error: { message: 'Missing Volces API key' } },
+        { status: 401 }
+      );
+    }
+
+    try {
+      if (body.stream === true) {
+        const readable = await callVolcesExperimentalChat({
+          model,
+          messages: body.messages,
+          stream: true,
+          apiKey,
+        });
+
+        return new Response(readable, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+            'X-LLM-Provider': 'volces-experimental',
+            'X-LLM-Note': 'experimental',
+          },
+        });
+      }
+
+      const result = await callVolcesExperimentalChat({
+        model,
+        messages: body.messages,
+        apiKey,
+      });
+
+      return NextResponse.json(result, {
+        headers: {
+          'X-LLM-Provider': 'volces-experimental',
+          'X-LLM-Note': 'experimental',
+        },
+      });
+    } catch (err: any) {
+      console.error('[VOLCES EXPERIMENTAL ERROR]', err);
+
+      return NextResponse.json(
+        {
+          error: {
+            message:
+              err?.message || 'Volces experimental model failed',
+            provider: 'volces-experimental',
+          },
         },
         { status: 500 }
       );
     }
+  }
 
-    // Check if client provided their own API key
-    const clientAuth = request.headers.get('Authorization');
-    const clientApiKey = clientAuth?.startsWith('Bearer ') ? clientAuth.slice(7) : undefined;
-    // Ignore placeholder keys
-    const effectiveClientKey = clientApiKey && !clientApiKey.startsWith('dummy') && !clientApiKey.startsWith('sk-placeholder')
-      ? clientApiKey
-      : undefined;
+  /**
+   * Build provider fallback chain
+   */
+  let chain = providersList;
 
-    const client = createClient(provider, effectiveClientKey);
-    const isStreaming = body.stream === true;
+  if (providerId && providersMap[providerId]) {
+    chain = [
+      providersMap[providerId],
+      ...providersList.filter(p => p.id !== providerId),
+    ];
+  }
 
-    // Update model in request body to use actual model ID (without provider prefix)
-    const requestBody = { ...body, model: modelId };
-
-    if (isStreaming) {
-      // Streaming response
-      const stream = await client.chat.completions.create({
-        ...requestBody,
-        stream: true,
-      } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
-
-      // Convert to SSE format
-      const encoder = new TextEncoder();
-      const readable = new ReadableStream({
-        async start(controller) {
-          try {
-            for await (const chunk of stream) {
-              const data = JSON.stringify(chunk);
-              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-            }
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            controller.close();
-          } catch (error) {
-            console.error('[LLM Proxy] Stream error:', error);
-            controller.error(error);
-          }
-        },
-      });
-
-      return new Response(readable, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-        },
-      });
-    } else {
-      // Non-streaming response
-      const response = await client.chat.completions.create({
-        ...requestBody,
-        stream: false,
-      });
-      return NextResponse.json(response);
-    }
-  } catch (error) {
-    console.error('[LLM Proxy] Error:', error);
-
-    if (error instanceof OpenAI.APIError) {
-      return NextResponse.json(
-        { error: { message: error.message, type: 'api_error', code: error.code } },
-        { status: error.status || 500 }
-      );
-    }
-
+  if (chain.length === 0) {
     return NextResponse.json(
-      {
-        error: {
-          message: error instanceof Error ? error.message : 'Internal server error',
-          type: 'proxy_error',
-        },
-      },
+      { error: { message: 'No provider configured' } },
       { status: 500 }
     );
   }
-}
 
-// Handle OPTIONS for CORS
-// Note: In production, consider restricting Access-Control-Allow-Origin to specific domains
-export async function OPTIONS(request: NextRequest) {
-  const origin = request.headers.get('origin') || '';
+  const requestBody = {
+    ...body,
+    model,
+  };
 
-  // Allow same-origin requests and localhost for development
-  const allowedOrigins = [
-    process.env.ALLOWED_ORIGIN, // Set this in production
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
-  ].filter(Boolean);
+  let lastError: any = null;
 
-  const isAllowed = allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development';
+  for (const provider of chain) {
+    try {
+      const forceStreaming = provider.id === 'nvidia';
+      const streaming =
+        forceStreaming || body.stream === true;
 
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      'Access-Control-Allow-Origin': isAllowed ? origin : '',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Provider-Id',
+      if (streaming) {
+        const readable = await tryStreaming(
+          provider,
+          requestBody,
+          clientKey
+        );
+
+        return new Response(readable, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+            'X-LLM-Provider': provider.id,
+          },
+        });
+      }
+
+      const response = await tryNonStreaming(
+        provider,
+        requestBody,
+        clientKey
+      );
+
+      return NextResponse.json(response, {
+        headers: {
+          'X-LLM-Provider': provider.id,
+        },
+      });
+    } catch (err: any) {
+      console.error(
+        `[LLM FALLBACK] ${provider.id} failed`,
+        err
+      );
+      lastError = err;
+      continue;
+    }
+  }
+
+  // All providers failed
+  if (lastError instanceof OpenAI.APIError) {
+    return NextResponse.json(
+      {
+        error: {
+          message: lastError.message,
+          code: lastError.code,
+          provider: 'all_failed',
+        },
+      },
+      { status: lastError.status || 500 }
+    );
+  }
+
+  return NextResponse.json(
+    {
+      error: {
+        message:
+          lastError?.message || 'All providers failed',
+        provider: 'all_failed',
+      },
     },
-  });
+    { status: 500 }
+  );
 }
+
